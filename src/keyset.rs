@@ -5,27 +5,10 @@ use std::collections::HashMap;
 
 use crate::Amount;
 
-/// A keyset ID is an identifier for a specific keyset. It can be derived by
-/// anyone who knows the set of public keys of a mint. The keyset ID **CAN**
-/// be stored in a Cashu token such that the token can be used to identify
-/// which mint or keyset it was generated from.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct Id(String);
-
-/// Inner mapping of Amount -> PublicKey
+/// Mapping of Amount -> PublicKey
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Map(HashMap<Amount, PublicKey>);
-
-/// A keyset is a set of public keys that the mint `Bob` generates and shares
-/// with its users. It refers to the set of public keys that each correspond
-/// to the amount values that the mint supports (e.g. 1, 2, 4, 8, ...)
-/// respectively.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct KeySet {
-    id: Id,
-    keys: Map,
-}
 
 impl Map {
     /// Iterate through the (`Amount`, `PublicKey`) entries in the Map
@@ -34,12 +17,30 @@ impl Map {
     }
 }
 
+impl From<&mint::Map> for Map {
+    fn from(map: &mint::Map) -> Self {
+        Self(
+            map.iter()
+                .map(|(amount, keypair)| (*amount, keypair.public_key()))
+                .collect(),
+        )
+    }
+}
+
+/// A keyset ID is an identifier for a specific keyset. It can be derived by
+/// anyone who knows the set of public keys of a mint. The keyset ID **CAN**
+/// be stored in a Cashu token such that the token can be used to identify
+/// which mint or keyset it was generated from.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Id(String);
+
 impl From<&Map> for Id {
     fn from(map: &Map) -> Self {
         use base64::{engine::general_purpose, Engine as _};
+        use bitcoin::hashes::sha256::Hash as Sha256;
         use bitcoin::hashes::Hash;
 
-        /*
+        /* NUT-02 § 2.2.2
             1 - sort keyset by amount
             2 - concatenate all (sorted) public keys to one string
             3 - HASH_SHA256 the concatenated public keys
@@ -51,11 +52,21 @@ impl From<&Map> for Id {
             .sorted_by(|(amt_a, _), (amt_b, _)| amt_a.cmp(amt_b))
             .map(|(_, pubkey)| pubkey)
             .join("");
-        let hash = bitcoin::hashes::sha256::Hash::hash(pubkeys_concat.as_bytes());
+        let hash = Sha256::hash(pubkeys_concat.as_bytes());
         let encoded = general_purpose::STANDARD.encode(hash.as_byte_array());
 
         Self(encoded[0..12].to_string())
     }
+}
+
+/// A keyset is a set of public keys that the mint `Bob` generates and shares
+/// with its users. It refers to the set of public keys that each correspond
+/// to the amount values that the mint supports (e.g. 1, 2, 4, 8, ...)
+/// respectively.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KeySet {
+    pub id: Id,
+    pub keys: Map,
 }
 
 impl From<Map> for KeySet {
@@ -67,9 +78,85 @@ impl From<Map> for KeySet {
     }
 }
 
+pub mod mint {
+    use crate::Amount;
+    use bitcoin::{hashes::HashEngine, secp256k1::KeyPair};
+    use serde::{Deserialize, Serialize};
+    use std::collections::HashMap;
+
+    use super::Id;
+
+    /// Inner mapping of Amount -> KeyPair
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(transparent)]
+    pub struct Map(HashMap<Amount, KeyPair>);
+
+    impl Map {
+        /// Iterate through the (`Amount`, `KeyPair`) entries in the Map
+        pub fn iter(&self) -> impl Iterator<Item = (&Amount, &KeyPair)> {
+            self.0.iter()
+        }
+    }
+
+    /// Mapping of Amounts to KeyPairs that the mint controls
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct KeySet {
+        pub id: Id,
+        pub keys: Map,
+    }
+
+    impl KeySet {
+        pub fn generate(
+            secret: impl Into<String>,
+            derivation_path: impl Into<String>,
+            max_order: u8,
+        ) -> Self {
+            use bitcoin::hashes::sha256::Hash as Sha256;
+            use bitcoin::hashes::Hash;
+
+            // Elliptic curve math context
+            let secp = bitcoin::secp256k1::Secp256k1::new();
+
+            /* NUT-02 § 2.1
+                for i in range(MAX_ORDER):
+                    k_i = HASH_SHA256(s + D + i)[:32]
+            */
+
+            let mut map = HashMap::with_capacity(max_order as usize);
+
+            // SHA-256 midstate, for quicker hashing
+            let mut engine = Sha256::engine();
+            engine.input(secret.into().as_bytes());
+            engine.input(derivation_path.into().as_bytes());
+
+            for i in 0..max_order {
+                let amount = Amount::from(2_u64.pow(i as u32));
+                // Reuse midstate
+                let mut e = engine.clone();
+                e.input(i.to_string().as_bytes());
+                let hash = Sha256::from_engine(e);
+                // Skip key generation failures
+                let Ok(keypair) = KeyPair::from_seckey_slice(&secp, &hash.as_byte_array()[0..32]) else {
+                    continue;
+                };
+                map.insert(amount, keypair);
+            }
+
+            let map = Map(map);
+
+            let public_map = super::Map::from(&map);
+
+            Self {
+                id: Id::from(&public_map),
+                keys: map,
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
-    use super::{Id, KeySet, Map};
+    use super::{mint, Id, KeySet, Map};
 
     const KEYSET_ID: &str = "I2yN+iRYfkzT";
     const KEYSET: &str = r#"
@@ -149,5 +236,11 @@ mod test {
 
         assert_eq!(id, Id(KEYSET_ID.to_string()));
         assert_eq!(keyset.id, id);
+    }
+
+    #[test]
+    fn mint_keyset_generation() {
+        let keyset = mint::KeySet::generate("master", "0/0/0/0", 64);
+        assert_eq!(keyset.id, Id("JHV8eUnoAln/".to_string()))
     }
 }
