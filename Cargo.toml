@@ -1,0 +1,11 @@
+[package]
+name = "cashu"
+version = "0.0.1"
+description = "Chaumian ecash protocol for Bitcoin"
+keywords = ["ecash", "bitcoin", "cashu"]
+categories = ["cryptography", "cryptography::cryptocurrencies"]
+authors = ["Clark Moody <clark@clarkmoody.com>"]
+license = "MIT"
+edition = "2021"
+
+[dependencies]
