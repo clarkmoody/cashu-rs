@@ -1,4 +1,5 @@
+mod amount;
 pub mod ecash;
 pub mod keyset;
 
-pub use ecash::Amount;
+pub use amount::Amount;

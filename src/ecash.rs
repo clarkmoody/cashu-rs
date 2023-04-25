@@ -2,17 +2,7 @@ use bitcoin::secp256k1::PublicKey;
 use serde::{Deserialize, Serialize};
 
 use crate::keyset;
-
-/// Number of satoshis
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct Amount(#[serde(with = "bitcoin::amount::serde::as_sat")] bitcoin::Amount);
-
-impl From<u64> for Amount {
-    fn from(value: u64) -> Self {
-        Self(bitcoin::Amount::from_sat(value))
-    }
-}
+use crate::Amount;
 
 /// An encrypted ("blinded") secret and an amount is sent from Alice to Bob
 /// for minting tokens or for splitting tokens. A BlindedMessage is also
