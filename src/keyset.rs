@@ -15,6 +15,10 @@ impl Map {
     pub fn iter(&self) -> impl Iterator<Item = (&Amount, &PublicKey)> {
         self.0.iter()
     }
+
+    pub fn get(&self, amount: Amount) -> Option<&PublicKey> {
+        self.0.get(&amount)
+    }
 }
 
 impl From<&mint::Map> for Map {
@@ -78,9 +82,27 @@ impl From<Map> for KeySet {
     }
 }
 
+impl From<mint::KeySet> for KeySet {
+    fn from(keyset: mint::KeySet) -> Self {
+        KeySet {
+            id: keyset.id.clone(),
+            keys: Map::from(&keyset.keys),
+        }
+    }
+}
+
+impl KeySet {
+    pub fn get(&self, amount: Amount) -> Option<&PublicKey> {
+        self.keys.get(amount)
+    }
+}
+
 pub mod mint {
     use crate::Amount;
-    use bitcoin::{hashes::HashEngine, secp256k1::KeyPair};
+    use bitcoin::{
+        hashes::HashEngine,
+        secp256k1::{KeyPair, SecretKey},
+    };
     use serde::{Deserialize, Serialize};
     use std::collections::HashMap;
 
@@ -96,6 +118,10 @@ pub mod mint {
         pub fn iter(&self) -> impl Iterator<Item = (&Amount, &KeyPair)> {
             self.0.iter()
         }
+
+        pub fn get(&self, amount: Amount) -> Option<&KeyPair> {
+            self.0.get(&amount)
+        }
     }
 
     /// Mapping of Amounts to KeyPairs that the mint controls
@@ -106,6 +132,10 @@ pub mod mint {
     }
 
     impl KeySet {
+        pub fn get(&self, amount: Amount) -> Option<&KeyPair> {
+            self.keys.get(amount)
+        }
+
         pub fn generate(
             secret: impl Into<String>,
             derivation_path: impl Into<String>,
@@ -135,10 +165,8 @@ pub mod mint {
                 let mut e = engine.clone();
                 e.input(i.to_string().as_bytes());
                 let hash = Sha256::from_engine(e);
-                // Skip key generation failures
-                let Ok(keypair) = KeyPair::from_seckey_slice(&secp, &hash.as_byte_array()[0..32]) else {
-                    continue;
-                };
+                let secret_key = SecretKey::from(hash);
+                let keypair = KeyPair::from_secret_key(&secp, &secret_key);
                 map.insert(amount, keypair);
             }
 
