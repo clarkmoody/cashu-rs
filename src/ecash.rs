@@ -1,8 +1,8 @@
-use bitcoin::secp256k1::XOnlyPublicKey;
-use bitcoin::secp256k1::{self, PublicKey, SecretKey};
+use bitcoin::secp256k1::PublicKey;
 use serde::{Deserialize, Serialize};
 
 use crate::keyset;
+use crate::secret::Secret;
 use crate::Amount;
 
 /// An encrypted ("blinded") secret and an amount is sent from Alice to Bob
@@ -36,12 +36,12 @@ pub struct BlindedSignature {
 /// Alice to Carol for which it is first can be serialized. Upon receiving the
 /// token, Carol deserializes it and requests a split from Bob to receive new
 /// tokens.
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Proof {
     /// The value of the Proof
     pub amount: Amount,
     /// The secret message
-    pub secret: String,
+    pub secret: Secret,
     /// The unblinded signature on secret
     #[serde(rename = "C")]
     pub c: PublicKey,
@@ -56,7 +56,7 @@ pub struct Proof {
 /// An list of Proofs. In general, this will be used for most
 /// operations instead of a single Proof. Proofs must be serialized before
 /// sending between wallets.
-type Proofs = Vec<Proof>;
+pub type Proofs = Vec<Proof>;
 
 /// This token format has the `[version]` value A. Here, List[Proof] is identical to a V2 token.
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
@@ -103,7 +103,7 @@ impl Token {
 pub fn hash_to_curve(secret: &[u8]) -> PublicKey {
     use bitcoin::hashes::sha256::Hash as Sha256;
     use bitcoin::hashes::Hash;
-    use bitcoin::secp256k1::Parity;
+    use bitcoin::secp256k1::{Parity, XOnlyPublicKey};
 
     let hash = Sha256::hash(secret);
     let mut message = hash.to_byte_array();

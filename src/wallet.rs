@@ -6,19 +6,21 @@ use std::collections::HashMap;
 use crate::ecash;
 use crate::keyset::{self, KeySet};
 use crate::mint::MintResponse;
+use crate::secret::Secret;
 use crate::Amount;
 
 pub struct Wallet {
     mint: String,
     active_keyset: KeySet,
     inactive_keysets: HashMap<keyset::Id, KeySet>,
-    pub proofs: Vec<ecash::Proof>,
+    // TODO: Wallet Proof type that contains flag for pending and send ID
+    pub proofs: ecash::Proofs,
 }
 
 impl Wallet {
     pub fn new(mint: impl Into<String>, active_keyset: KeySet) -> Self {
         Self {
-            mint: mint.into(),
+            _mint: mint.into(),
             active_keyset,
             inactive_keysets: Default::default(),
             proofs: Vec::new(),
@@ -92,7 +94,7 @@ pub struct PreMint {
     amount: Amount,
     blinded_key: PublicKey,
     blinding_factor: SecretKey,
-    secret: String,
+    secret: Secret,
 }
 
 pub struct PreMintSecrets {

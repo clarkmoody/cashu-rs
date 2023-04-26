@@ -10,6 +10,7 @@ use crate::ecash::BlindedMessage;
 use crate::ecash::BlindedSignature;
 use crate::keyset;
 use crate::keyset::mint::KeySet;
+use crate::secret::Secret;
 use crate::wallet;
 use crate::Amount;
 
@@ -61,7 +62,7 @@ pub struct Mint {
     inactive_keysets: HashMap<keyset::Id, KeySet>,
     paid_invoices: HashMap<Sha256, (Amount, String)>,
     pending_invoices: HashMap<Sha256, (Amount, String)>,
-    spent_secrets: HashSet<String>,
+    spent_secrets: HashSet<Secret>,
 }
 
 impl Mint {
@@ -90,8 +91,23 @@ impl Mint {
         }
     }
 
+    /// Retrieve the public keys of the active keyset for distribution to
+    /// wallet clients
     pub fn active_keyset_pubkeys(&self) -> keyset::KeySet {
         keyset::KeySet::from(self.active_keyset.clone())
+    }
+
+    /// Generate a new active keyset and move the current active keyset to the
+    /// inactive list
+    pub fn rotate_keyset(
+        &mut self,
+        secret: impl Into<String>,
+        derivation_path: impl Into<String>,
+        max_order: u8,
+    ) {
+        self.inactive_keysets
+            .insert(self.active_keyset.id.clone(), self.active_keyset.clone());
+        self.active_keyset = KeySet::generate(secret, derivation_path, max_order);
     }
 
     pub fn process_invoice_request(&mut self, amount: Amount) -> Invoice {
