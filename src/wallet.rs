@@ -1,5 +1,4 @@
 use bitcoin::secp256k1::{PublicKey, Scalar, Secp256k1, SecretKey};
-use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -10,7 +9,7 @@ use crate::secret::Secret;
 use crate::Amount;
 
 pub struct Wallet {
-    mint: String,
+    _mint: String,
     active_keyset: KeySet,
     inactive_keysets: HashMap<keyset::Id, KeySet>,
     // TODO: Wallet Proof type that contains flag for pending and send ID
@@ -88,6 +87,21 @@ impl Wallet {
             self.proofs.push(proof);
         }
     }
+
+    pub fn pre_split_request(&self, target: Amount) -> Result<PreSplitRequest, Error> {
+        let mut proofs = Vec::with_capacity(self.proofs.len());
+        let mut running_total = Amount::ZERO;
+        for proof in self.proofs.iter() {
+            running_total += proof.amount;
+            proofs.push(proof.clone());
+
+            if running_total >= target {
+                return PreSplitRequest::new(target, proofs);
+            }
+        }
+
+        Err(Error::InsufficientFunds)
+    }
 }
 
 pub struct PreMint {
@@ -103,21 +117,14 @@ pub struct PreMintSecrets {
 
 impl PreMintSecrets {
     pub fn new(total_amount: Amount) -> Self {
-        use base64::{engine::general_purpose::URL_SAFE, Engine as _};
-
         let secp = Secp256k1::new();
         let mut rng = rand::thread_rng();
 
-        let mut random_bytes = [0u8; 32];
-
         let amounts = total_amount.split();
-        let mut output = Vec::with_capacity(amounts.len());
+        let n = amounts.len();
+        let mut output = Vec::with_capacity(n);
 
-        for amount in amounts {
-            // Generate random bytes
-            rng.fill_bytes(&mut random_bytes);
-            // The secret string
-            let secret = URL_SAFE.encode(random_bytes);
+        for (amount, secret) in amounts.into_iter().zip(Secret::generate(n).into_iter()) {
             // Get a curve point from the hash of the secret (Y)
             let y = ecash::hash_to_curve(secret.as_bytes());
             // The blinding factor is a random secret key (r)
@@ -144,6 +151,10 @@ impl PreMintSecrets {
 
     fn into_iter(self) -> impl Iterator<Item = PreMint> {
         self.secrets.into_iter()
+    }
+
+    fn len(&self) -> usize {
+        self.secrets.len()
     }
 }
 
@@ -179,4 +190,80 @@ impl From<&PreMintSecrets> for MintRequest {
                 .collect(),
         }
     }
+}
+
+pub struct PreSplitRequest {
+    pub amount: Amount,
+    pub target_secrets: PreMintSecrets,
+    pub change_secrets: PreMintSecrets,
+    pub proofs: ecash::Proofs,
+}
+
+impl PreSplitRequest {
+    pub fn new(target: Amount, proofs: ecash::Proofs) -> Result<PreSplitRequest, Error> {
+        let proof_total_amount = proofs
+            .iter()
+            .map(|ecash::Proof { amount, .. }| *amount)
+            .sum();
+
+        if target > proof_total_amount {
+            return Err(Error::InsufficientFunds);
+        }
+
+        let change = proof_total_amount - target;
+        let target_secrets = PreMintSecrets::new(target);
+        let change_secrets = PreMintSecrets::new(change);
+
+        Ok(PreSplitRequest {
+            amount: target,
+            target_secrets,
+            change_secrets,
+            proofs,
+        })
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SplitRequest {
+    /// Amount fo value to split out of the Proofs
+    pub amount: Amount,
+    /// Messages for the mint to sign
+    pub outputs: Vec<ecash::BlindedMessage>,
+    /// Tokens spent to the mint to be reissued as the `outputs`
+    pub proofs: ecash::Proofs,
+}
+
+impl SplitRequest {
+    pub fn proofs_amount(&self) -> Amount {
+        self.proofs
+            .iter()
+            .map(|ecash::Proof { amount, .. }| *amount)
+            .sum()
+    }
+
+    pub fn output_amount(&self) -> Amount {
+        self.outputs
+            .iter()
+            .map(|ecash::BlindedMessage { amount, .. }| *amount)
+            .sum()
+    }
+}
+
+impl From<&PreSplitRequest> for SplitRequest {
+    fn from(req: &PreSplitRequest) -> Self {
+        let mut outputs = Vec::with_capacity(req.target_secrets.len() + req.change_secrets.len());
+        outputs.extend(MintRequest::from(&req.target_secrets).outputs);
+        outputs.extend(MintRequest::from(&req.change_secrets).outputs);
+
+        SplitRequest {
+            amount: req.amount,
+            outputs,
+            proofs: req.proofs.clone(),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum Error {
+    InsufficientFunds,
 }

@@ -48,6 +48,12 @@ impl std::ops::Add for Amount {
     }
 }
 
+impl std::ops::AddAssign for Amount {
+    fn add_assign(&mut self, rhs: Self) {
+        self.0 += rhs.0;
+    }
+}
+
 impl std::ops::Sub for Amount {
     type Output = Amount;
 

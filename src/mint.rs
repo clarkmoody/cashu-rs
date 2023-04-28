@@ -2,12 +2,9 @@ use std::collections::{HashMap, HashSet};
 
 use bitcoin::hashes::sha256::Hash as Sha256;
 use bitcoin::hashes::Hash;
-use bitcoin::secp256k1::{self, PublicKey, Scalar, Secp256k1, SecretKey};
 use serde::{Deserialize, Serialize};
 
-use crate::ecash;
-use crate::ecash::BlindedMessage;
-use crate::ecash::BlindedSignature;
+use crate::ecash::{self, BlindedMessage, BlindedSignature};
 use crate::keyset;
 use crate::keyset::mint::KeySet;
 use crate::secret::Secret;
@@ -55,6 +52,22 @@ pub struct SplitResponse {
     /// Outputs that sum to the target requested amount
     #[serde(rename = "snd")]
     target: Vec<ecash::BlindedSignature>,
+}
+
+impl SplitResponse {
+    pub fn change_amount(&self) -> Amount {
+        self.change
+            .iter()
+            .map(|ecash::BlindedSignature { amount, .. }| *amount)
+            .sum()
+    }
+
+    pub fn target_amount(&self) -> Amount {
+        self.target
+            .iter()
+            .map(|ecash::BlindedSignature { amount, .. }| *amount)
+            .sum()
+    }
 }
 
 pub struct Mint {
@@ -134,12 +147,12 @@ impl Mint {
         mint_request: wallet::MintRequest,
     ) -> Result<MintResponse, Error> {
         let Some((amount, _invoice)) = self.paid_invoices.get(&payment_hash) else {
-            return Err(Error::InvalidPaymentHash);
+            return Err(Error::PaymentHash);
         };
 
         // Check for amount mismatch
         if mint_request.total_amount() != *amount {
-            return Err(Error::InvalidAmount);
+            return Err(Error::Amount);
         }
 
         let mut blind_signatures = Vec::with_capacity(mint_request.outputs.len());
@@ -156,16 +169,18 @@ impl Mint {
     }
 
     fn blind_sign(&self, blinded_message: &BlindedMessage) -> Result<BlindedSignature, Error> {
+        use bitcoin::secp256k1::{Scalar, Secp256k1};
+
         let secp = Secp256k1::new();
 
         let BlindedMessage { amount, b } = blinded_message;
 
         let Some(key_pair) = self.active_keyset.get(*amount) else {
             // No key for amount
-            return Err(Error::InvalidAmount);
+            return Err(Error::Amount);
         };
 
-        let scalar = secp256k1::Scalar::from(key_pair.secret_key());
+        let scalar = Scalar::from(key_pair.secret_key());
 
         Ok(BlindedSignature {
             amount: *amount,
@@ -174,7 +189,64 @@ impl Mint {
         })
     }
 
-    fn verify_proof(&self, proof: &ecash::Proof) -> Result<String, Error> {
+    pub fn process_split_request(
+        &mut self,
+        split_request: wallet::SplitRequest,
+    ) -> Result<SplitResponse, Error> {
+        let proofs_total = split_request.proofs_amount();
+        if proofs_total < split_request.amount {
+            return Err(Error::Amount);
+        }
+
+        let output_total = split_request.output_amount();
+        if output_total < split_request.amount {
+            return Err(Error::Amount);
+        }
+
+        if proofs_total != output_total {
+            return Err(Error::Amount);
+        }
+
+        let mut secrets = Vec::with_capacity(split_request.proofs.len());
+        for proof in split_request.proofs {
+            secrets.push(self.verify_proof(&proof)?);
+        }
+
+        let mut target_total = Amount::ZERO;
+        let mut change_total = Amount::ZERO;
+        let mut target = Vec::with_capacity(split_request.outputs.len());
+        let mut change = Vec::with_capacity(split_request.outputs.len());
+
+        // Create sets of target and change amounts that we're looking for
+        // in the outputs (blind messages). As we loop, take from those sets,
+        // target amount first.
+        for output in split_request.outputs {
+            let signed = self.blind_sign(&output)?;
+
+            // Accumulate outputs into the target (send) list
+            if target_total + signed.amount <= split_request.amount {
+                target_total += signed.amount;
+                target.push(signed);
+            } else {
+                change_total += signed.amount;
+                change.push(signed);
+            }
+        }
+
+        if target_total != split_request.amount {
+            return Err(Error::OutputOrdering);
+        }
+
+        for secret in secrets {
+            self.spent_secrets.insert(secret);
+        }
+
+        Ok(SplitResponse { change, target })
+    }
+
+    fn verify_proof(&self, proof: &ecash::Proof) -> Result<Secret, Error> {
+        use bitcoin::secp256k1::{Scalar, Secp256k1};
+
         let secp = Secp256k1::new();
 
         let ecash::Proof {
@@ -184,6 +256,10 @@ impl Mint {
             id,
             ..
         } = proof;
+
+        if self.spent_secrets.contains(&secret) {
+            return Err(Error::Proof);
+        }
 
         let keyset = id.as_ref().map_or_else(
             || &self.active_keyset,
@@ -197,7 +273,7 @@ impl Mint {
         );
 
         let Some(keypair) = keyset.get(*amount) else {
-            return Err(Error::InvalidAmount);
+            return Err(Error::Amount);
         };
 
         let k = keypair.secret_key();
@@ -207,16 +283,17 @@ impl Mint {
         if ky == *c {
             Ok(secret.clone())
         } else {
-            Err(Error::InvalidProof)
+            Err(Error::Proof)
         }
     }
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Error {
-    InvalidAmount,
-    InvalidProof,
-    InvalidPaymentHash,
+    Amount,
+    OutputOrdering,
+    PaymentHash,
+    Proof,
 }
 
 #[cfg(test)]
@@ -239,10 +316,24 @@ mod test {
             .expect("process mint request");
         wallet.process_mint_response(pre_secrets, mint_response);
 
-        // TODO: Melt / Split requests here instead
-
-        for proof in wallet.proofs {
-            assert_eq!(mint.verify_proof(&proof), Ok(proof.secret));
+        for proof in wallet.proofs.iter() {
+            assert_eq!(mint.verify_proof(&proof), Ok(proof.secret.clone()));
         }
+
+        let pre_split_request = wallet
+            .pre_split_request(Amount::from(7))
+            .expect("pre split requst");
+        let split_request = wallet::SplitRequest::from(&pre_split_request);
+        let proof_amount = split_request.proofs_amount();
+
+        let split_response = mint
+            .process_split_request(split_request)
+            .expect("process split request");
+
+        assert_eq!(split_response.target_amount(), Amount::from(7));
+        assert_eq!(
+            split_response.change_amount(),
+            proof_amount - Amount::from(7)
+        );
     }
 }
