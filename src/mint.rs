@@ -16,7 +16,7 @@ pub struct Invoice {
     /// BOLT-11 payment request
     #[serde(rename = "pr")]
     payment_request: String, // TODO: LN invoice
-    /// Hash of the invoice
+    /// Random hash. MUST NOT be the hash of the invoice.
     hash: Sha256,
 }
 
@@ -124,8 +124,15 @@ impl Mint {
     }
 
     pub fn process_invoice_request(&mut self, amount: Amount) -> Invoice {
+        use rand::RngCore;
+
         let invoice = String::new(); // TODO: LN invoice
-        let hash = Sha256::hash(invoice.as_bytes());
+
+        let mut rng = rand::thread_rng();
+        let mut random_bytes = [0u8; Sha256::LEN];
+        rng.fill_bytes(&mut random_bytes);
+        let hash = Sha256::hash(&random_bytes);
+
         self.pending_invoices
             .insert(hash, (amount, invoice.clone()));
 
@@ -143,10 +150,10 @@ impl Mint {
 
     pub fn process_mint_request(
         &mut self,
-        payment_hash: Sha256,
+        hash: Sha256,
         mint_request: wallet::MintRequest,
     ) -> Result<MintResponse, Error> {
-        let Some((amount, _invoice)) = self.paid_invoices.get(&payment_hash) else {
+        let Some((amount, _invoice)) = self.paid_invoices.get(&hash) else {
             return Err(Error::PaymentHash);
         };
 
@@ -161,7 +168,7 @@ impl Mint {
             blind_signatures.push(self.blind_sign(&blinded_message)?);
         }
 
-        self.paid_invoices.remove(&payment_hash);
+        self.paid_invoices.remove(&hash);
 
         Ok(MintResponse {
             promises: blind_signatures,
