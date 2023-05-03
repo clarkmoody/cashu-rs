@@ -70,6 +70,12 @@ impl SplitResponse {
     }
 }
 
+/// API response for list of keysets
+#[derive(Debug, Serialize, Deserialize)]
+pub struct KeySetsResponse {
+    keysets: Vec<keyset::Id>,
+}
+
 pub struct Mint {
     active_keyset: KeySet,
     inactive_keysets: HashMap<keyset::Id, KeySet>,
@@ -108,6 +114,21 @@ impl Mint {
     /// wallet clients
     pub fn active_keyset_pubkeys(&self) -> keyset::KeySet {
         keyset::KeySet::from(self.active_keyset.clone())
+    }
+
+    /// Return a list of all supported keysets
+    pub fn keysets(&self) -> KeySetsResponse {
+        let mut keysets: Vec<_> = self.inactive_keysets.keys().cloned().collect();
+        keysets.push(self.active_keyset.id.clone());
+        KeySetsResponse { keysets }
+    }
+
+    pub fn keyset(&self, id: &keyset::Id) -> Option<keyset::KeySet> {
+        if &self.active_keyset.id == id {
+            return Some(self.active_keyset.clone().into());
+        }
+
+        self.inactive_keysets.get(id).map(|k| k.clone().into())
     }
 
     /// Generate a new active keyset and move the current active keyset to the

@@ -38,6 +38,12 @@ impl From<&mint::Map> for Map {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Id(String);
 
+impl Id {
+    pub fn to_standard_base64(&self) -> Self {
+        Self(crate::base64_url_safe_to_standard(self.0.as_str()))
+    }
+}
+
 impl From<&Map> for Id {
     fn from(map: &Map) -> Self {
         use base64::{engine::general_purpose, Engine as _};
