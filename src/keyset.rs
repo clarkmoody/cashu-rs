@@ -1,14 +1,14 @@
 use bitcoin::secp256k1::PublicKey;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use crate::Amount;
 
 /// Mapping of Amount -> PublicKey
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct Map(HashMap<Amount, PublicKey>);
+pub struct Map(BTreeMap<Amount, PublicKey>);
 
 impl Map {
     /// Iterate through the (`Amount`, `PublicKey`) entries in the Map
@@ -104,14 +104,14 @@ pub mod mint {
         secp256k1::{KeyPair, SecretKey},
     };
     use serde::{Deserialize, Serialize};
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     use super::Id;
 
     /// Inner mapping of Amount -> KeyPair
     #[derive(Debug, Clone, Serialize, Deserialize)]
     #[serde(transparent)]
-    pub struct Map(HashMap<Amount, KeyPair>);
+    pub struct Map(BTreeMap<Amount, KeyPair>);
 
     impl Map {
         /// Iterate through the (`Amount`, `KeyPair`) entries in the Map
@@ -152,7 +152,7 @@ pub mod mint {
                     k_i = HASH_SHA256(s + D + i)[:32]
             */
 
-            let mut map = HashMap::with_capacity(max_order as usize);
+            let mut map = BTreeMap::new();
 
             // SHA-256 midstate, for quicker hashing
             let mut engine = Sha256::engine();
