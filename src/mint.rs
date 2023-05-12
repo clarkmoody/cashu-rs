@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use bitcoin::hashes::sha256::Hash as Sha256;
+pub use bitcoin::hashes::sha256::Hash as Sha256;
 use bitcoin::hashes::Hash;
 use serde::{Deserialize, Serialize};
 
@@ -15,9 +15,9 @@ use crate::Amount;
 pub struct Invoice {
     /// BOLT-11 payment request
     #[serde(rename = "pr")]
-    payment_request: String, // TODO: LN invoice
+    pub payment_request: String, // TODO: LN invoice
     /// Random hash. MUST NOT be the hash of the invoice.
-    hash: Sha256,
+    pub hash: Sha256,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -48,10 +48,10 @@ pub struct SplitResponse {
     /// Outputs that sum to the remainder after reaching the
     /// requested amount (total - target)
     #[serde(rename = "fst")]
-    change: Vec<ecash::BlindedSignature>,
+    pub change: Vec<ecash::BlindedSignature>,
     /// Outputs that sum to the target requested amount
     #[serde(rename = "snd")]
-    target: Vec<ecash::BlindedSignature>,
+    pub target: Vec<ecash::BlindedSignature>,
 }
 
 impl SplitResponse {
@@ -205,7 +205,7 @@ impl Mint {
 
         let Some(key_pair) = self.active_keyset.get(*amount) else {
             // No key for amount
-            return Err(Error::Amount);
+            return Err(Error::AmountKey);
         };
 
         let scalar = Scalar::from(key_pair.secret_key());
@@ -301,7 +301,7 @@ impl Mint {
         );
 
         let Some(keypair) = keyset.get(*amount) else {
-            return Err(Error::Amount);
+            return Err(Error::AmountKey);
         };
 
         let k = keypair.secret_key();
@@ -316,11 +316,17 @@ impl Mint {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum Error {
+    #[error("Invalid Amount")]
     Amount,
+    #[error("No PubKey for Amount")]
+    AmountKey,
+    #[error("Unexpected Output Ordering")]
     OutputOrdering,
+    #[error("Invalid Payment Hash")]
     PaymentHash,
+    #[error("Invalid Proof")]
     Proof,
 }
 

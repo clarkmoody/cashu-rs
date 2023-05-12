@@ -20,6 +20,16 @@ impl Amount {
             })
             .collect()
     }
+
+    pub fn to_string(&self) -> String {
+        self.0.to_sat().to_string()
+    }
+}
+
+impl Default for Amount {
+    fn default() -> Self {
+        Amount::ZERO
+    }
 }
 
 impl From<bitcoin::Amount> for Amount {
@@ -37,6 +47,12 @@ impl From<Amount> for bitcoin::Amount {
 impl From<u64> for Amount {
     fn from(value: u64) -> Self {
         Self(bitcoin::Amount::from_sat(value))
+    }
+}
+
+impl From<Amount> for u64 {
+    fn from(value: Amount) -> Self {
+        value.0.to_sat()
     }
 }
 
