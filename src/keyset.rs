@@ -35,18 +35,113 @@ impl From<&mint::Map> for Map {
 /// anyone who knows the set of public keys of a mint. The keyset ID **CAN**
 /// be stored in a Cashu token such that the token can be used to identify
 /// which mint or keyset it was generated from.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct Id(String);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Id([u8; Id::BYTES]);
 
 impl Id {
-    pub fn to_standard_base64(&self) -> Self {
-        Self(crate::base64_url_safe_to_standard(self.0.as_str()))
+    const BYTES: usize = 9;
+    const STRLEN: usize = 12;
+
+    pub fn try_from_base64(b64: &str) -> Result<Self, Error> {
+        use base64::{
+            engine::general_purpose::{STANDARD, URL_SAFE},
+            Engine as _,
+        };
+
+        if b64.len() != Self::STRLEN {
+            return Err(Error::Length);
+        }
+
+        if let Ok(bytes) = URL_SAFE.decode(b64) {
+            if bytes.len() == Self::BYTES {
+                return Ok(Self(
+                    <[u8; Self::BYTES]>::try_from(bytes.as_slice()).unwrap(),
+                ));
+            }
+        }
+
+        match STANDARD.decode(b64) {
+            Ok(bytes) if bytes.len() == Self::BYTES => Ok(Self(
+                <[u8; Self::BYTES]>::try_from(bytes.as_slice()).unwrap(),
+            )),
+            Ok(_) => Err(Error::Length),
+            Err(e) => Err(Error::Base64(e)),
+        }
     }
+
+    // pub fn to_standard_base64(&self) -> Self {
+    //     Self(crate::base64_url_safe_to_standard(self.0.as_str()))
+    // }
+}
+
+impl std::fmt::Display for Id {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use base64::{engine::general_purpose, Engine as _};
+        let mut output = String::with_capacity(Self::STRLEN);
+        general_purpose::STANDARD.encode_string(&self.0.as_slice(), &mut output);
+        f.write_str(&output)
+    }
+}
+
+impl std::convert::TryFrom<String> for Id {
+    type Error = Error;
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Id::try_from_base64(&value)
+    }
+}
+
+impl serde::ser::Serialize for Id {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> serde::de::Deserialize<'de> for Id {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct IdVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for IdVisitor {
+            type Value = Id;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a 12-character Base64 string")
+            }
+
+            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Id::try_from_base64(v).map_err(|e| match e {
+                    Error::Length => E::custom(format!(
+                        "Invalid Length: Expected {}, got {}",
+                        Id::STRLEN,
+                        v.len()
+                    )),
+                    Error::Base64(e) => E::custom(e),
+                })
+            }
+        }
+
+        deserializer.deserialize_str(IdVisitor)
+    }
+}
+
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum Error {
+    #[error("base64: {0}")]
+    Base64(base64::DecodeError),
+    #[error("invalid length")]
+    Length,
 }
 
 impl From<&Map> for Id {
     fn from(map: &Map) -> Self {
-        use base64::{engine::general_purpose, Engine as _};
         use bitcoin::hashes::sha256::Hash as Sha256;
         use bitcoin::hashes::Hash;
 
@@ -63,9 +158,9 @@ impl From<&Map> for Id {
             .map(|(_, pubkey)| pubkey)
             .join("");
         let hash = Sha256::hash(pubkeys_concat.as_bytes());
-        let encoded = general_purpose::STANDARD.encode(hash.as_byte_array());
-
-        Self(encoded[0..12].to_string())
+        let bytes = hash.to_byte_array();
+        // First 9 bytes of hash will encode as the first 12 Base64 characters later
+        Self(<[u8; Self::BYTES]>::try_from(&bytes[0..Self::BYTES]).unwrap())
     }
 }
 
@@ -192,7 +287,7 @@ pub mod mint {
 mod test {
     use super::{mint, Id, KeySet, Map};
 
-    const KEYSET_ID: &str = "I2yN+iRYfkzT";
+    const KEYSET_ID_JSON: &str = "\"I2yN+iRYfkzT\"";
     const KEYSET: &str = r#"
         {
             "1":"03ba786a2c0745f8c30e490288acd7a72dd53d65afd292ddefa326a4a3fa14c566",
@@ -267,14 +362,16 @@ mod test {
         let map: Map = serde_json::from_str(KEYSET).unwrap();
         let id = Id::from(&map);
         let keyset = KeySet::from(map);
+        let expected = serde_json::from_str(KEYSET_ID_JSON).unwrap();
 
-        assert_eq!(id, Id(KEYSET_ID.to_string()));
+        assert_eq!(id, expected);
         assert_eq!(keyset.id, id);
     }
 
     #[test]
     fn mint_keyset_generation() {
         let keyset = mint::KeySet::generate("master", "0/0/0/0", 64);
-        assert_eq!(keyset.id, Id("JHV8eUnoAln/".to_string()))
+        let expected = serde_json::from_str("\"JHV8eUnoAln/\"").unwrap();
+        assert_eq!(keyset.id, expected);
     }
 }
