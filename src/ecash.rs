@@ -61,15 +61,15 @@ pub type Proofs = Vec<Proof>;
 /// This token format has the `[version]` value A. Here, List[Proof] is identical to a V2 token.
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub struct Token {
-    token: Vec<MintProofs>,
-    memo: Option<String>,
+    pub memo: Option<String>,
+    pub token: Vec<MintProofs>,
 }
 
 /// Proofs associated with a mint
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub struct MintProofs {
-    mint: String, // TODO: URI
-    proofs: Proofs,
+    pub mint: String,
+    pub proofs: Proofs,
 }
 
 impl Token {

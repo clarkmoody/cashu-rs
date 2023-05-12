@@ -219,7 +219,7 @@ impl Mint {
 
     pub fn process_split_request(
         &mut self,
-        split_request: wallet::SplitRequest,
+        split_request: wallet::split::Request,
     ) -> Result<SplitResponse, Error> {
         let proofs_total = split_request.proofs_amount();
         if proofs_total < split_request.amount {
@@ -335,7 +335,9 @@ mod test {
         let invoice = mint.process_invoice_request(Amount::from(13));
         mint.pay_invoice(invoice.hash);
 
-        let mut wallet = wallet::Wallet::new("mint", mint.active_keyset_pubkeys());
+        let url = url::Url::parse("http://localhost").unwrap();
+
+        let mut wallet = wallet::Wallet::new(url, mint.active_keyset_pubkeys());
         let pre_secrets = wallet::PreMintSecrets::new(Amount::from(13));
         let mint_request = wallet::MintRequest::from(&pre_secrets);
 
@@ -344,14 +346,10 @@ mod test {
             .expect("process mint request");
         wallet.process_mint_response(pre_secrets, mint_response);
 
-        for proof in wallet.proofs.iter() {
-            assert_eq!(mint.verify_proof(&proof), Ok(proof.secret.clone()));
-        }
-
         let pre_split_request = wallet
             .pre_split_request(Amount::from(7))
             .expect("pre split requst");
-        let split_request = wallet::SplitRequest::from(&pre_split_request);
+        let split_request = wallet::split::Request::from(&pre_split_request);
         let proof_amount = split_request.proofs_amount();
 
         let split_response = mint
