@@ -324,6 +324,86 @@ pub enum Error {
     Proof,
 }
 
+pub mod request {
+    use super::{wallet, Amount, Sha256};
+    use serde::Serialize;
+    use url::Url;
+
+    #[derive(Debug)]
+    pub struct Request {
+        pub method: Method,
+        pub url: Url,
+        pub body: Option<serde_json::Value>,
+    }
+
+    impl Request {
+        fn get(url: Url) -> Self {
+            Request {
+                method: Method::Get,
+                url,
+                body: None,
+            }
+        }
+
+        fn post_json<T: Serialize>(url: Url, body: T) -> Self {
+            Request {
+                method: Method::Post,
+                url,
+                body: serde_json::to_value(&body).ok(),
+            }
+        }
+    }
+
+    #[derive(Debug)]
+    pub enum Method {
+        Get,
+        Post,
+    }
+
+    /// Valid requests to make to the mint
+    #[derive(Debug)]
+    pub enum Endpoint {
+        Keys,
+        InvoiceRequest {
+            amount: Amount,
+        },
+        MintRequest {
+            payment_hash: Sha256,
+            mint_request: wallet::MintRequest,
+        },
+        Split {
+            split_request: wallet::split::Request,
+        },
+    }
+
+    impl Endpoint {
+        pub fn request(&self, base: &Url) -> Request {
+            match self {
+                Endpoint::Keys => Request::get(base.join("/keys").unwrap()),
+                Endpoint::InvoiceRequest { amount } => {
+                    let mut url = base.join("/mint").unwrap();
+                    url.query_pairs_mut()
+                        .append_pair("amount", amount.to_string().as_str());
+                    Request::get(url)
+                }
+                Endpoint::MintRequest {
+                    payment_hash,
+                    mint_request,
+                } => {
+                    let mut url = base.join("/mint").unwrap();
+                    url.query_pairs_mut()
+                        .append_pair("hash", payment_hash.to_string().as_str());
+                    Request::post_json(url, mint_request)
+                }
+                Endpoint::Split { split_request } => {
+                    let url = base.join("/split").unwrap();
+                    Request::post_json(url, split_request)
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::Mint;
