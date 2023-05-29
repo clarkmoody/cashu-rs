@@ -15,7 +15,7 @@ use crate::Amount;
 pub struct Invoice {
     /// BOLT-11 payment request
     #[serde(rename = "pr")]
-    pub payment_request: String, // TODO: LN invoice
+    pub payment_request: lightning_invoice::Invoice,
     /// Random hash. MUST NOT be the hash of the invoice.
     pub hash: Sha256,
 }
@@ -79,8 +79,8 @@ pub struct KeySetsResponse {
 pub struct Mint {
     active_keyset: KeySet,
     inactive_keysets: HashMap<keyset::Id, KeySet>,
-    paid_invoices: HashMap<Sha256, (Amount, String)>,
-    pending_invoices: HashMap<Sha256, (Amount, String)>,
+    paid_invoices: HashMap<Sha256, (Amount, lightning_invoice::Invoice)>,
+    pending_invoices: HashMap<Sha256, (Amount, Option<lightning_invoice::Invoice>)>,
     spent_secrets: HashSet<Secret>,
 }
 
@@ -144,27 +144,38 @@ impl Mint {
         self.active_keyset = KeySet::generate(secret, derivation_path, max_order);
     }
 
-    pub fn process_invoice_request(&mut self, amount: Amount) -> Invoice {
+    /// Reserve a place in `pending_invoices` and return the hash
+    /// Set the invoice later with `set_invoice`
+    pub fn process_invoice_request(&mut self, amount: Amount) -> Sha256 {
         use rand::RngCore;
-
-        let invoice = String::new(); // TODO: LN invoice
 
         let mut rng = rand::thread_rng();
         let mut random_bytes = [0u8; Sha256::LEN];
         rng.fill_bytes(&mut random_bytes);
         let hash = Sha256::hash(&random_bytes);
 
-        self.pending_invoices
-            .insert(hash, (amount, invoice.clone()));
+        self.pending_invoices.insert(hash, (amount, None));
 
-        Invoice {
-            payment_request: invoice,
-            hash,
+        hash
+    }
+
+    pub fn set_invoice(
+        &mut self,
+        hash: Sha256,
+        invoice: lightning_invoice::Invoice,
+    ) -> Option<Invoice> {
+        if let Some((_, inv)) = self.pending_invoices.get_mut(&hash) {
+            *inv = Some(invoice.clone());
+            return Some(Invoice {
+                hash,
+                payment_request: invoice,
+            });
         }
+        None
     }
 
     pub fn pay_invoice(&mut self, hash: Sha256) {
-        if let Some((amount, invoice)) = self.pending_invoices.remove(&hash) {
+        if let Some((amount, Some(invoice))) = self.pending_invoices.remove(&hash) {
             self.paid_invoices.insert(hash, (amount, invoice));
         }
     }
@@ -385,9 +396,9 @@ pub mod request {
     impl Endpoint {
         pub fn request(&self, base: &Url) -> Request {
             match self {
-                Endpoint::Keys => Request::get(base.join("/keys").unwrap()),
+                Endpoint::Keys => Request::get(base.join("keys").unwrap()),
                 Endpoint::InvoiceRequest { amount } => {
-                    let mut url = base.join("/mint").unwrap();
+                    let mut url = base.join("mint").unwrap();
                     url.query_pairs_mut()
                         .append_pair("amount", amount.to_string().as_str());
                     Request::get(url)
@@ -396,13 +407,13 @@ pub mod request {
                     payment_hash,
                     mint_request,
                 } => {
-                    let mut url = base.join("/mint").unwrap();
+                    let mut url = base.join("mint").unwrap();
                     url.query_pairs_mut()
                         .append_pair("hash", payment_hash.to_string().as_str());
                     Request::post_json(url, mint_request)
                 }
                 Endpoint::Split { split_request } => {
-                    let url = base.join("/split").unwrap();
+                    let url = base.join("split").unwrap();
                     Request::post_json(url, split_request)
                 }
             }
@@ -412,13 +423,16 @@ pub mod request {
 
 #[cfg(test)]
 mod test {
+    use std::str::FromStr;
+
     use super::Mint;
     use crate::{wallet, Amount};
 
     #[test]
     fn becdh() {
         let mut mint = Mint::new("the-secret", "0/0/0/0", 4);
-        let invoice = mint.process_invoice_request(Amount::from(13));
+        let hash = mint.process_invoice_request(Amount::from(13));
+        let invoice = mint.set_invoice(hash, invoice()).unwrap();
         mint.pay_invoice(invoice.hash);
 
         let url = url::Url::parse("http://localhost").unwrap();
@@ -447,5 +461,15 @@ mod test {
             split_response.change_amount(),
             proof_amount - Amount::from(7)
         );
+    }
+
+    fn invoice() -> lightning_invoice::Invoice {
+        let raw = "lnbc15u1p3xnhl2pp5jptserfk3zk4qy42tlucycrfwxhydvlemu9pqr93\
+            tuzlv9cc7g3sdqsvfhkcap3xyhx7un8cqzpgxqzjcsp5f8c52y2stc300gl6s4xsw\
+            tjpc37hrnnr3c9wvtgjfuvqmpm35evq9qyyssqy4lgd8tj637qcjp05rdpxxykjen\
+            thxftej7a2zzmwrmrl70fyj9hvj0rewhzj7jfyuwkwcg9g2jpwtk3wkjtwnkdks84\
+            hsnu8xps5vsq4gj5hs";
+
+        lightning_invoice::Invoice::from_str(raw).unwrap()
     }
 }

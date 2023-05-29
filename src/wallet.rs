@@ -6,7 +6,7 @@ use url::Url;
 use crate::ecash::{self, MintProofs, Token};
 use crate::keyset::{self, KeySet};
 use crate::mint::request::{Endpoint, Request};
-use crate::mint::{MintResponse, SplitResponse};
+use crate::mint::{Invoice, MintResponse, Sha256, SplitResponse};
 use crate::secret::Secret;
 use crate::Amount;
 
@@ -15,6 +15,7 @@ pub struct Wallet {
     mint: String,
     active_keyset: KeySet,
     inactive_keysets: HashMap<keyset::Id, KeySet>,
+    pending_funding_invoices: HashMap<Sha256, (Amount, lightning_invoice::Invoice)>,
     proofs: HashMap<proof::Id, proof::Proof>,
     split_proposals: HashMap<split::Id, split::Proposal>,
 }
@@ -25,6 +26,7 @@ impl Wallet {
             mint: mint.to_string(),
             active_keyset,
             inactive_keysets: Default::default(),
+            pending_funding_invoices: Default::default(),
             proofs: Default::default(),
             split_proposals: Default::default(),
         }
@@ -49,6 +51,18 @@ impl Wallet {
     pub fn request(&self, endpoint: Endpoint) -> Request {
         let url = Url::parse(&self.mint).unwrap();
         endpoint.request(&url)
+    }
+
+    pub fn store_funding_invoice(&mut self, amount: Amount, invoice: Invoice) {
+        self.pending_funding_invoices
+            .insert(invoice.hash, (amount, invoice.payment_request));
+    }
+
+    pub fn get_funding_invoice(
+        &self,
+        hash: Sha256,
+    ) -> Option<&(Amount, lightning_invoice::Invoice)> {
+        self.pending_funding_invoices.get(&hash)
     }
 
     pub fn process_mint_response(
